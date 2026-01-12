@@ -121,7 +121,7 @@ fun Long.formatBytes(): String = when {
     this >= 1_000L -> "%.2f KB".format(this / 1_000.0)
     else -> "$this B"
 }
-fun String.getImageUrl(baseUrl: String, id: String): String = baseUrl.toHttpUrl().newBuilder().addPathSegment("Items").addPathSegment(id).addPathSegment("Images").addPathSegment("Primary").addQueryParameter("tag", this).build().toString()
+fun String.ImageDto.getImageUrl(baseUrl: String, id: String): String = baseUrl.toHttpUrl().newBuilder().addPathSegment("Items").addPathSegment(id).addPathSegment("Images").addPathSegment("Primary").addQueryParameter("tag", this).build().toString()
 object PascalCaseToCamelCase : JsonNamingStrategy { override fun serialNameForJson(descriptor: SerialDescriptor, elementIndex: Int, serialName: String): String = serialName.replaceFirstChar { it.uppercase() } }
 fun getAuthHeader(deviceInfo: Fanush.DeviceInfo, token: String? = null): String {
     val params = listOf("Client" to deviceInfo.clientName, "Version" to deviceInfo.version, "DeviceId" to deviceInfo.id, "Device" to deviceInfo.name, "Token" to token)
@@ -132,7 +132,7 @@ class Fanush : Source(), UnmeteredSource, ConfigurableAnimeSource {
     override val name = "Fanush"
     override val lang = "all"
     override val supportsLatest = true
-    override val id: Long = 5181466391484419852L // Unique Stable ID
+    override val id: Long = 5181466391484419852L
 
     private val prefs: SharedPreferences by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", 0)
@@ -232,12 +232,20 @@ class Fanush : Source(), UnmeteredSource, ConfigurableAnimeSource {
         val url = anime.url.toHttpUrl()
         val itemId = url.pathSegments.last()
         val frag = url.fragment ?: ""
-        val epUrl = when {
-            frag.startsWith("series") -> "$baseUrl/Shows/$itemId/Episodes?Fields=DateCreated,OriginalTitle,SortName"
-            else -> anime.url
+        
+        // Correct approach: Use /Users/{userId}/Items with ParentId for series
+        val epUrl = if (frag.startsWith("series")) {
+            "$baseUrl/Users/$userId/Items?ParentId=$itemId&IncludeItemTypes=Episode&Recursive=true&Fields=DateCreated,OriginalTitle,SortName"
+        } else {
+            anime.url
         }
+        
         val resp = client.newCall(GET(epUrl)).await()
-        val items = if (epUrl.contains("Episodes")) resp.parseAs<ItemListDto>(json).items else listOf(resp.parseAs<ItemDto>(json))
+        val items = if (epUrl.contains("ParentId")) {
+            resp.parseAs<ItemListDto>(json).items
+        } else {
+            listOf(resp.parseAs<ItemDto>(json))
+        }
         return items.map { it.toSEpisode(baseUrl, userId, "", emptySet(), "{number} - {title}") }.reversed()
     }
 
@@ -266,8 +274,7 @@ class Fanush : Source(), UnmeteredSource, ConfigurableAnimeSource {
             title = "Base URL"
             summary = "Jellyfin Server URL (default: http://103.132.95.221:8096)"
             setDefaultValue("http://103.132.95.221:8096")
-            setOnPreferenceChangeListener {
-                _, newValue ->
+            setOnPreferenceChangeListener { _, newValue ->
                 try {
                     val newUrl = (newValue as String).trim()
                     newUrl.toHttpUrl() // Validate URL
